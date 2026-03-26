@@ -100,7 +100,8 @@ export default function Home() {
       })
 
       if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`)
+        const errorData = await res.json().catch(() => ({}))
+        throw new Error(errorData?.error || `HTTP error! status: ${res.status}`)
       }
 
       const data = await res.json()
@@ -117,9 +118,10 @@ export default function Home() {
       }
     } catch (error) {
       console.error("API error:", error)
+      const errorMessage = error instanceof Error ? error.message : "Sorry, I encountered an error. Please try again."
       setMessages((prev) => [
         ...prev,
-        { id: generateId(), role: "assistant", content: "Sorry, I encountered an error. Please try again." },
+        { id: generateId(), role: "assistant", content: errorMessage },
       ])
     } finally {
       setIsLoading(false)
@@ -158,7 +160,8 @@ export default function Home() {
       })
 
       if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`)
+        const errorData = await res.json().catch(() => ({}))
+        throw new Error(errorData?.error || `HTTP error! status: ${res.status}`)
       }
 
       const data = await res.json()

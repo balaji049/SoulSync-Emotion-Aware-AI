@@ -1,17 +1,29 @@
-import { GoogleGenerativeAI } from "@google/generative-ai"
-import { supabase } from "@/lib/supabase"
+//import { GoogleGenerativeAI } from "@google/generative-ai"
+import { hasSupabaseConfig, supabase } from "@/lib/supabase"
 import { NextResponse } from "next/server"
 import { stupidJokes } from "@/data/stupidstuff"
+import Groq from "groq-sdk"
+
+
 
 export const runtime = "nodejs"
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-
+//const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 const languageMap: { [key: string]: string } = {
   "en-US": "English",
   "hi-IN": "Hindi",
   "mr-IN": "Marathi",
   "te-IN": "Telugu",
+}
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile"
+
+function getGroqClient() {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) {
+    return null
+  }
+
+  return new Groq({ apiKey })
 }
 
 type Message = {
@@ -22,11 +34,24 @@ type Message = {
 
 async function translateJoke(joke: string, targetLanguageName: string) {
   if (targetLanguageName === "English") return joke
+
+  const groq = getGroqClient()
+  if (!groq) {
+    return joke
+  }
+
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" })
-    const prompt = `Please translate this short text into ${targetLanguageName}. Keep the translation natural and concise:\n\n"${joke}"`
-    const result = await model.generateContent(prompt)
-    return (await result.response).text().trim()
+    const chatCompletion = await groq.chat.completions.create({
+      model: GROQ_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: `Translate this into ${targetLanguageName}: "${joke}"`,
+        },
+      ],
+    })
+
+    return chatCompletion.choices[0]?.message?.content?.trim() || joke
   } catch (error) {
     console.error("Joke translation failed:", error)
     return joke
@@ -35,6 +60,11 @@ async function translateJoke(joke: string, targetLanguageName: string) {
 
 export async function POST(req: Request) {
   try {
+    const groq = getGroqClient()
+    if (!groq) {
+      return NextResponse.json({ error: "GROQ_API_KEY is missing on the server." }, { status: 500 })
+    }
+
     const body = await req.json()
     const { messages, language, action }: { messages: Message[]; language: string; action?: string } = body
     const targetLanguageName = languageMap[language] || "English"
@@ -50,7 +80,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Messages are required for a chat" }, { status: 400 })
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" })
     const lastUserMessage = messages[messages.length - 1]
     const chatHistory = messages
       .slice(0, -1)
@@ -87,21 +116,33 @@ export async function POST(req: Request) {
     User's Latest Message: "${lastUserMessage.content}"
     `
 
-    const result = await model.generateContent(advancedPrompt)
-    const response = await result.response
-    const raw = response.text()
+    const chatCompletion = await groq.chat.completions.create({
+      model: GROQ_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: advancedPrompt,
+        },
+      ],
+    })
+
+    const raw = chatCompletion.choices[0]?.message?.content || ""
 
     let parsedResponse
     try {
       const cleanedJsonString = raw.replace("```json", "").replace("```", "").trim()
       parsedResponse = JSON.parse(cleanedJsonString)
     } catch (error) {
-      console.error("Failed to parse Gemini JSON response:", error, "Raw response:", raw)
+      console.error("Failed to parse Groq JSON response:", error, "Raw response:", raw)
       return NextResponse.json({ responseText: raw, detectedEmotion: "neutral" })
     }
 
     // Save conversation to Supabase (without embeddings)
     const saveConversation = async () => {
+      if (!hasSupabaseConfig || !supabase) {
+        return
+      }
+
       try {
         await supabase.from("messages").insert([
           { content: lastUserMessage.content, role: "user" },
